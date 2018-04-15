@@ -13,7 +13,7 @@
 @property (nonatomic, strong) NSString *name;
 @property (nonatomic, strong) NSString *nickName;
 @property (nonatomic, assign) NSInteger age;
-@property (nonatomic, assign) double salary;
+@property (nonatomic, assign) float salary;
 
 - (id) initWithName:(NSString *)name;
 @end
@@ -50,7 +50,7 @@
 	[person2 vc_addObserver:self forKeyPath:@"salary"];
 	person2.nickName = @"kc";
 	person2.age = 10;
-	person2.salary = 1000.0;
+	person2.salary = 1000.1;
 	[person2 vc_removeObserver:self forKeyPath:@"nickName"];
 	NSLog(@"=== after remove p2 nickName observer ===");
 	person2.nickName = @"Pogba";
@@ -59,6 +59,8 @@
 	NSLog(@"=== after remove p1 name observer ===");
 	[person vc_removeObserver:self forKeyPath:@"nickName"];
 	person.nickName = @"Alex";
+	[person vc_addObserver:self forKeyPath:@"age"];
+	person.age = 1;
 }
 
 - (void)vc_observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(id)change {
