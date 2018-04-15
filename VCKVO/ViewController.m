@@ -9,11 +9,27 @@
 #import "ViewController.h"
 #import "NSObject+VCKVO.h"
 
+@interface Wheel: NSObject
+@property (nonatomic, assign) float price;
+@end
+
+@implementation Wheel
+@end
+
+@interface Car: NSObject
+@property (nonatomic, strong) NSString *name;
+@property (nonatomic, strong) Wheel *wheel;
+@end
+
+@implementation Car
+@end
+
 @interface Person: NSObject
 @property (nonatomic, strong) NSString *name;
 @property (nonatomic, strong) NSString *nickName;
 @property (nonatomic, assign) NSInteger age;
 @property (nonatomic, assign) float salary;
+@property (nonatomic, strong) Car *car;
 
 - (id) initWithName:(NSString *)name;
 @end
@@ -36,12 +52,32 @@
 - (void)viewDidLoad {
 	[super viewDidLoad];
 	// Do any additional setup after loading the view, typically from a nib.
-	NSLog(@"=== person1 ===");
+	[self person1Handling];
+//	[self person2Handling];
+}
+
+- (void)person1Handling {
+	NSLog(@"===== person1 =====");
 	Person *person = [[Person alloc] initWithName:@"Vincent"];
-	[person vc_addObserver:self forKeyPath:@"nickName"];
-	person.nickName = @"Joker";
+	person.car = [[Car alloc] init];
+	person.car.wheel = [Wheel new];
+	[person vc_addObserver:self forKeyPath:@"car.name"];
+	[person vc_addObserver:person.car forKeyPath:@"car.wheel.price"];
+	person.car.name = @"Benz";
+	person.car.wheel.price = 100.5;
 	
-	NSLog(@"=== person2 ===");
+	
+	NSLog(@"=== after remove p1 observers ===");
+	[person vc_removeObserver:person.car forKeyPath:@"car.wheel.price"];
+	[person vc_removeObserver:self forKeyPath:@"car.name"];
+	person.car.name = @"BMW";
+	person.car.wheel.price = 101.5;
+	[person vc_addObserver:self forKeyPath:@"age"];
+	person.age = 1;
+}
+
+- (void)person2Handling {
+	NSLog(@"===== person2 =====");
 	Person *person2 = [[Person alloc] initWithName:@"vc"];
 	[person2 vc_addObserver:self forKeyPath:@"name"];
 	person2.name = @"James";
@@ -56,15 +92,10 @@
 	person2.nickName = @"Pogba";
 	person2.name = @"Ronaldo";
 	
-	NSLog(@"=== after remove p1 name observer ===");
-	[person vc_removeObserver:self forKeyPath:@"nickName"];
-	person.nickName = @"Alex";
-	[person vc_addObserver:self forKeyPath:@"age"];
-	person.age = 1;
 }
 
 - (void)vc_observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(id)change {
-	NSLog(@"=== vc_observeValueForKeyPath ===");
+	NSLog(@"=== ViewController vc_observeValueForKeyPath ===");
 	NSLog(@"< object = %@, keyPath = %@, change = %@ >",object, keyPath, change);
 }
 

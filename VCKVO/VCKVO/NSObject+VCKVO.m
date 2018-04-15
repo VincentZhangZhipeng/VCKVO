@@ -15,92 +15,14 @@ const void* _observer  = &_observer;
 
 @implementation NSObject (VCKVO)
 
+#pragma mark - c methods
 static NSString * getterNameFromSetter(NSString *setterName) {
 	return [NSString stringWithFormat:@"%@%@", [setterName substringWithRange:NSMakeRange(3, 1)].lowercaseString, [setterName substringWithRange:NSMakeRange(4, setterName.length - 5)]];
 }
 
-// FIXME: arm64的va_list的结构改变，会crash：https://blog.nelhage.com/2010/10/amd64-and-va_arg/
-// 动态参数是因为：指针类型id和值类型如int不兼容
-static void VCSetter(id self, SEL _cmd, ...)   {
-	NSString *setterName = NSStringFromSelector(_cmd);
-	NSString *getterName = getterNameFromSetter(setterName);
-	Class inerClass = object_getClass(self);
-	
-	// 获取参数的类型
-	NSMethodSignature *methodSignature = [inerClass instanceMethodSignatureForSelector:_cmd];
-	const char *argumentType = [methodSignature getArgumentTypeAtIndex:2];
-	
-	id obj;
-	va_list args;
-	va_start(args, _cmd);
-	switch (argumentType[0]) {
-		case 'c':
-			obj = @(va_arg(args, char));
-			break;
-		case 'i':
-			obj = @(va_arg(args, int));
-			break;
-		case 's':
-			obj = @(va_arg(args, short));
-			break;
-		case 'l':
-			obj = @(va_arg(args, long));
-			break;
-		case 'q':
-			obj = @(va_arg(args, long long));
-			break;
-		case 'C':
-			obj = @(va_arg(args, unsigned char));
-			break;
-		case 'I':
-			obj = @(va_arg(args, unsigned int));
-			break;
-		case 'S':
-			obj = @(va_arg(args, unsigned short));
-			break;
-		case 'L':
-			obj= @(va_arg(args, unsigned long));
-			break;
-		case 'Q':
-			obj = @(va_arg(args, unsigned long long));
-			break;
-		case 'f':
-			obj = @(va_arg(args, float));
-			break;
-		case 'd':
-			obj = @(va_arg(args, double));
-			break;
-		case 'B':
-			obj = @(va_arg(args, BOOL));
-		default:
-			obj = (va_arg(args, id));
-			break;
-	}
-	va_end(args);
-	
-	// 调用父类的setter方法
-	Class originalClass = class_getSuperclass(inerClass);
-	struct objc_super superInfo = {
-		self,
-		originalClass
-	};
-	((void (*) (void * , SEL, ...))objc_msgSendSuper)(&superInfo, _cmd, obj);
-	
-	// 获取观察者
-	NSMapTable * observerMap = objc_getAssociatedObject(self, _observer);
-	id observer = [observerMap objectForKey: getterName];
-	SEL sel = NSSelectorFromString(@"vc_observeValueForKeyPath:ofObject:change:");
-	if (observer) {
-		if([observer respondsToSelector:sel]) {
-			// objc_msgSend方法来调用vc_observeValueForKeyPath:ofObject:change:方法
-			((void(*) (id, SEL, ...))objc_msgSend)(observer, sel, getterName, self, obj);
-		}
-	}
-}
-
 static id getArgument(NSInvocation *invocation){
 	id value;
-	if (invocation.methodSignature.numberOfArguments>2) {
+	if (invocation.methodSignature.numberOfArguments > 2) {
 #define getValue(type) \
 type arg;\
 [invocation getArgument:&arg atIndex:2];\
@@ -175,21 +97,21 @@ value = @(arg);\
 }
 
 // 混淆forwardInvocation方法
-static void swizzlingForwardInvocation(Class _Nonnull class) {
+static void swizzleForwardInvocation(Class _Nonnull class) {
 	SEL forwardInvocationSelector = NSSelectorFromString(@"forwardInvocation:");
 	Method forwardInvocationMethod = class_getInstanceMethod(class, forwardInvocationSelector);
 	const char *orginalEncodingTypes = method_getTypeEncoding(forwardInvocationMethod);
 	void (*originalForwardInvocationImp)(id, SEL, NSInvocation *) = (void *)method_getImplementation(forwardInvocationMethod);
 	
-	id vcForwardInvocationImp = ^(id self, NSInvocation *invocation) {
+	id vcForwardInvocationImp = ^(id target, NSInvocation *invocation) {
 		SEL selector = invocation.selector;
 		NSString *setterName = NSStringFromSelector(selector);
 		
 		if(![setterName hasPrefix:@"set"]) {
 			if(originalForwardInvocationImp) {
-				originalForwardInvocationImp(self, selector, invocation);
+				originalForwardInvocationImp(target, selector, invocation);
 			} else {
-				[self doesNotRecognizeSelector:selector];
+				[target doesNotRecognizeSelector:selector];
 			}
 			return;
 		}
@@ -197,20 +119,20 @@ static void swizzlingForwardInvocation(Class _Nonnull class) {
 		id value = getArgument(invocation);
 		
 		struct objc_super superInfo = {
-			self,
+			target,
 			class_getSuperclass(class)
 		};
 		// 调用父类的setter方法
 		((void (*) (void * , SEL, ...))objc_msgSendSuper)(&superInfo, selector, value);
 
 		// 获取观察者
-		NSMapTable * observerMap = objc_getAssociatedObject(self, _observer);
+		NSMapTable * observerMap = objc_getAssociatedObject(target, _observer);
 		id observer = [observerMap objectForKey: getterNameFromSetter(setterName)];
 		SEL observerSelector = NSSelectorFromString(@"vc_observeValueForKeyPath:ofObject:change:");
 		if (observer) {
 			if([observer respondsToSelector:observerSelector]) {
 				// objc_msgSend方法来调用vc_observeValueForKeyPath:ofObject:change:方法
-				((void(*) (id, SEL, ...))objc_msgSend)(observer, observerSelector, getterNameFromSetter(setterName), self, value);
+				((void(*) (id, SEL, ...))objc_msgSend)(observer, observerSelector, getterNameFromSetter(setterName), target, value);
 			}
 		}
 	};
@@ -219,16 +141,13 @@ static void swizzlingForwardInvocation(Class _Nonnull class) {
 	imp_removeBlock(imp_implementationWithBlock(vcForwardInvocationImp));
 }
 
-
-- (void)vc_addObserver:(NSObject *)observer forKeyPath:(NSString *)keyPath {
-	// FIXME: 未考虑链式keyValue情况，如：person.car.price
-	
+static void vcCreateInerClass(id target, NSObject * observer, NSString* getterName) {
 	/** isa swizzling
-	  * 1. 判断当前类的类型，以及中间类是否已经存在。如果既不是中间类，中间类也不存在，创建集成自原类的中间类
-	  * 2. 根据keyPath拼接成setter样式的selector，根据selector获取原setter参数类型并为中间类动态添加新方法
-	  * 3. 将self实例的isa指向中间类
-	**/
-	Class originalClass = object_getClass(self);
+	 * 1. 判断当前类的类型，以及中间类是否已经存在。如果既不是中间类，中间类也不存在，创建集成自原类的中间类
+	 * 2. 根据keyPath拼接成setter样式的selector，根据selector获取原setter参数类型并为中间类动态添加新方法
+	 * 3. 将self实例的isa指向中间类
+	 **/
+	Class originalClass = object_getClass(target);
 	Class inerClass;
 	if ([NSStringFromClass(originalClass) hasPrefix: prefix]) {
 		inerClass = originalClass;
@@ -240,46 +159,68 @@ static void swizzlingForwardInvocation(Class _Nonnull class) {
 		// 注册class，注意未注销前只能注册一次
 		objc_registerClassPair(inerClass);
 	}
-
-	NSString *setterSel = [NSString stringWithFormat:@"set%@%@:", [keyPath substringToIndex:1].uppercaseString, [keyPath substringFromIndex:1] ];
+	
+	NSString *setterSel = [NSString stringWithFormat:@"set%@%@:", [getterName substringToIndex:1].uppercaseString, [getterName substringFromIndex:1] ];
 	
 	// 获取入参方法类型
 	Method method = class_getInstanceMethod(originalClass, NSSelectorFromString(setterSel));
 	const char *types = method_getTypeEncoding(method);
 	
-//	class_addMethod(inerClass, NSSelectorFromString(setterSel), (IMP)VCSetter, types);
-
 	/** Method swizzling -- 解决VCSetter对于arm 64支持不足的问题
 	 * 1. 用vcForwardInvocation替换forwardInvocation的实现
 	 * 2. 将setter的selector指向完整消息转发方法forwardInvocation，用以传输不明确是指针类型还是值类型的参数
 	 **/
-	swizzlingForwardInvocation(inerClass);
+	swizzleForwardInvocation(inerClass);
 	class_replaceMethod(inerClass, NSSelectorFromString(setterSel), _objc_msgForward, types);
 	
-	NSMapTable<NSString *, id> *map = objc_getAssociatedObject(self, _observer);
+	NSMapTable<NSString *, id> *map = objc_getAssociatedObject(target, _observer);
 	if(!map) {
 		map = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsStrongMemory valueOptions:NSPointerFunctionsWeakMemory];
 	}
-	[map setObject:observer forKey:keyPath];
+	[map setObject:observer forKey:getterName];
 	
 	// 动态将observer添加到instance
-//	objc_setAssociatedObject(self, _observer, observer, OBJC_ASSOCIATION_ASSIGN);
-	objc_setAssociatedObject(self, _observer, map, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+	objc_setAssociatedObject(target, _observer, map, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 	
 	// 把instance的isa指向inerClass
-	object_setClass(self, inerClass);
+	object_setClass(target, inerClass);
+}
+
+- (id)targetFromKeyPath:(NSString *)keyPath {
+	id target = self;
+	NSArray *keyPaths = [keyPath componentsSeparatedByString:@"."];
+	if (keyPaths.count > 1) {
+		// 根据链式keyPath遍历获取getter对应的classclass
+		for (int i=0; i<keyPaths.count-1; i++) {
+			target = [target valueForKey: [keyPaths objectAtIndex:i]];
+		}
+	}
+	return target;
+}
+
+#pragma mark - kvo methods
+- (void)vc_addObserver:(NSObject *)observer forKeyPath:(NSString *)keyPath {
+	id target = [self targetFromKeyPath:keyPath];
+	NSString *getterName = [[keyPath componentsSeparatedByString:@"."] lastObject];
+	vcCreateInerClass(target, observer, getterName);
 }
 
 - (void)vc_removeObserver:(NSObject *)observer forKeyPath:(NSString *)keyPath {
-	Class currentClass = object_getClass(self);
-	NSMapTable *map = objc_getAssociatedObject(self, _observer);
-	[map removeObjectForKey: keyPath];
+	id target = [self targetFromKeyPath:keyPath];
+	Class currentClass = object_getClass(target);
+	NSMapTable *map = objc_getAssociatedObject(target, _observer);
+	[map removeObjectForKey: [[keyPath componentsSeparatedByString:@"."] lastObject]];
+	
 	if([NSStringFromClass(currentClass) hasPrefix: prefix] && map.count <= 0) {
+		// 重新指向未添加中间类之前的类
 		Class superClass = class_getSuperclass(currentClass);
-		object_setClass(self, superClass);
-//		objc_removeAssociatedObjects(self);
-//		objc_disposeClassPair(currentClass);
+		object_setClass(target, superClass);
 	}
+}
+
+- (void)vc_observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(id)change {
+	NSLog(@"=== NSObject vc_observeValueForKeyPath ===");
+	NSLog(@"< object = %@, keyPath = %@, change = %@ >",object, keyPath, change);
 }
 
 @end
