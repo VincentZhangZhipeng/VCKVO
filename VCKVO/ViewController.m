@@ -8,6 +8,7 @@
 
 #import "ViewController.h"
 #import "NSObject+VCKVO.h"
+#import <objc/runtime.h>
 
 @interface Wheel: NSObject
 @property (nonatomic, assign) float price;
@@ -52,8 +53,24 @@
 - (void)viewDidLoad {
 	[super viewDidLoad];
 	// Do any additional setup after loading the view, typically from a nib.
+	
+	// 观察kvo添加前后的person类
+//	[self kvoInsight];
+	
 	[self person1Handling];
-//	[self person2Handling];
+	[self person2Handling];
+	
+}
+
+- (void)kvoInsight {
+	Person *person = [Person new];
+	NSLog(@"person isa is <%@: %p>", object_getClass(person) , object_getClass(person));
+	NSLog(@"====== after add kvo ======");
+	[person addObserver:self forKeyPath:@"name" options:NSKeyValueObservingOptionNew | NSKeyValueObservingOptionOld context:nil];
+	NSLog(@"person isa is <%@: %p>", object_getClass(person), object_getClass(person));
+	NSLog(@"====== after remove kvo ======");
+	[person removeObserver:self forKeyPath:@"name" context:nil];
+	NSLog(@"person isa is <%@: %p>", object_getClass(person), object_getClass(person));
 }
 
 - (void)person1Handling {
@@ -98,7 +115,6 @@
 	NSLog(@"=== ViewController vc_observeValueForKeyPath ===");
 	NSLog(@"< object = %@, keyPath = %@, change = %@ >",object, keyPath, change);
 }
-
 
 
 - (void)didReceiveMemoryWarning {

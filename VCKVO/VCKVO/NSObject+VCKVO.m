@@ -23,6 +23,7 @@ static NSString * getterNameFromSetter(NSString *setterName) {
 static id getArgument(NSInvocation *invocation){
 	id value;
 	if (invocation.methodSignature.numberOfArguments > 2) {
+		// 宏定义，根据type获得对应类型的参数
 #define getValue(type) \
 type arg;\
 [invocation getArgument:&arg atIndex:2];\
@@ -96,8 +97,14 @@ value = @(arg);\
 	return value;
 }
 
-// 混淆forwardInvocation方法
 static void swizzleForwardInvocation(Class _Nonnull class) {
+	/** Method Swizzling
+	 * 1. 设置新的forwardInvocation方法--vcForwardInvocationImp
+	 * 2. 在新forwardInvocation方法中，对非setter方法的SEL调用原forwardInvocation
+	 * 3. 调用getArgument方法获得setter入参，并调用父类也即原始类的setter方法
+	 * 4. 获取observe并使用objc_msgSend方法来调用vc_observeValueForKeyPath:ofObject:change:方法
+	 * 5. 替换forwardInvocation SEL为vcForwardInvocationImp实现
+	 **/
 	SEL forwardInvocationSelector = NSSelectorFromString(@"forwardInvocation:");
 	Method forwardInvocationMethod = class_getInstanceMethod(class, forwardInvocationSelector);
 	const char *orginalEncodingTypes = method_getTypeEncoding(forwardInvocationMethod);
@@ -116,27 +123,27 @@ static void swizzleForwardInvocation(Class _Nonnull class) {
 			return;
 		}
 		
+		// 3
 		id value = getArgument(invocation);
 		
 		struct objc_super superInfo = {
 			target,
 			class_getSuperclass(class)
 		};
-		// 调用父类的setter方法
 		((void (*) (void * , SEL, ...))objc_msgSendSuper)(&superInfo, selector, value);
 
-		// 获取观察者
+		// 4
 		NSMapTable * observerMap = objc_getAssociatedObject(target, _observer);
 		id observer = [observerMap objectForKey: getterNameFromSetter(setterName)];
 		SEL observerSelector = NSSelectorFromString(@"vc_observeValueForKeyPath:ofObject:change:");
 		if (observer) {
 			if([observer respondsToSelector:observerSelector]) {
-				// objc_msgSend方法来调用vc_observeValueForKeyPath:ofObject:change:方法
 				((void(*) (id, SEL, ...))objc_msgSend)(observer, observerSelector, getterNameFromSetter(setterName), target, value);
 			}
 		}
 	};
 
+	// 5
 	class_replaceMethod(class, forwardInvocationSelector, imp_implementationWithBlock(vcForwardInvocationImp), orginalEncodingTypes);
 	imp_removeBlock(imp_implementationWithBlock(vcForwardInvocationImp));
 }
