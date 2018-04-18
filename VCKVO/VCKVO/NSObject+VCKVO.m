@@ -12,8 +12,12 @@
 
 NSString * const prefix = @"VCNSNotify_";
 const void* _observer  = &_observer;
+const void* _mapLockKey = &_mapLockKey;
 
 @implementation NSObject (VCKVO)
+
+#define LOCK(lock) dispatch_semaphore_wait(lock, DISPATCH_TIME_FOREVER);
+#define UNLOCK(lock) dispatch_semaphore_signal(lock);
 
 #pragma mark - c methods
 static NSString * getterNameFromSetter(NSString *setterName) {
@@ -154,6 +158,12 @@ static void vcCreateInerClass(id target, NSObject * observer, NSString* getterNa
 	 * 2. 根据keyPath拼接成setter样式的selector，根据selector获取原setter参数类型并为中间类动态添加新方法
 	 * 3. 将self实例的isa指向中间类
 	 **/
+	dispatch_semaphore_t mapLock = objc_getAssociatedObject(target, _mapLockKey);
+	if (!mapLock) {
+		mapLock = dispatch_semaphore_create(1);
+		objc_setAssociatedObject(target, _mapLockKey, mapLock, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+	}
+	LOCK(mapLock)
 	Class originalClass = object_getClass(target);
 	Class inerClass;
 	if ([NSStringFromClass(originalClass) hasPrefix: prefix]) {
@@ -180,17 +190,21 @@ static void vcCreateInerClass(id target, NSObject * observer, NSString* getterNa
 	swizzleForwardInvocation(inerClass);
 	class_replaceMethod(inerClass, NSSelectorFromString(setterSel), _objc_msgForward, types);
 	
+	
+	
 	NSMapTable<NSString *, id> *map = objc_getAssociatedObject(target, _observer);
 	if(!map) {
 		map = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsStrongMemory valueOptions:NSPointerFunctionsWeakMemory];
+		
+		// 动态将observer添加到instance
+		objc_setAssociatedObject(target, _observer, map, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 	}
 	[map setObject:observer forKey:getterName];
 	
-	// 动态将observer添加到instance
-	objc_setAssociatedObject(target, _observer, map, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-	
 	// 把instance的isa指向inerClass
 	object_setClass(target, inerClass);
+	
+	UNLOCK(mapLock)
 }
 
 - (id)targetFromKeyPath:(NSString *)keyPath {
@@ -207,6 +221,7 @@ static void vcCreateInerClass(id target, NSObject * observer, NSString* getterNa
 
 #pragma mark - kvo methods
 - (void)vc_addObserver:(NSObject *)observer forKeyPath:(NSString *)keyPath {
+	
 	id target = [self targetFromKeyPath:keyPath];
 	NSString *getterName = [[keyPath componentsSeparatedByString:@"."] lastObject];
 	vcCreateInerClass(target, observer, getterName);
@@ -215,6 +230,8 @@ static void vcCreateInerClass(id target, NSObject * observer, NSString* getterNa
 - (void)vc_removeObserver:(NSObject *)observer forKeyPath:(NSString *)keyPath {
 	id target = [self targetFromKeyPath:keyPath];
 	Class currentClass = object_getClass(target);
+	dispatch_semaphore_t mapLock = objc_getAssociatedObject(target, _mapLockKey);
+	LOCK(mapLock)
 	NSMapTable *map = objc_getAssociatedObject(target, _observer);
 	[map removeObjectForKey: [[keyPath componentsSeparatedByString:@"."] lastObject]];
 	
@@ -223,6 +240,7 @@ static void vcCreateInerClass(id target, NSObject * observer, NSString* getterNa
 		Class superClass = class_getSuperclass(currentClass);
 		object_setClass(target, superClass);
 	}
+	UNLOCK(mapLock)
 }
 
 - (void)vc_observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(id)change {
